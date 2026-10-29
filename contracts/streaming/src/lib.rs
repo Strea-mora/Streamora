@@ -46,6 +46,21 @@ enum DataKey {
     Stream(u64),
 }
 
+// TTL constants for stream entries and contract instance.
+// Soroban ledger entries have a time-to-live (TTL); when the TTL expires,
+// the entry is archived and must be restored before use. By extending the TTL
+// on each write/read, we keep active streams alive for long-running use cases
+// such as payroll and vesting streams.
+// - threshold: the TTL (in ledgers) below which we extend the entry.
+//   A typical Soroban ledger is ~5 seconds; 100_000 ledgers ≈ ~5.7 days.
+// - extend_to: the new TTL (in ledgers) to set when extending.
+//   200_000 ledgers ≈ ~11.6 days, which covers typical stream durations
+//   while keeping the TTL manageable. The extension is only applied when
+//   the current TTL is at or below the threshold, so entries with a larger
+//   TTL are left unchanged.
+const STREAM_TTL_THRESHOLD: u32 = 100_000;
+const STREAM_TTL_EXTEND_TO: u32 = 200_000;
+
 /// floor(amount * (t - start) / (end - start)), clamped to [0, amount].
 pub fn vested_at(amount: i128, start: u64, end: u64, t: u64) -> i128 {
     if t <= start {
@@ -65,14 +80,26 @@ fn effective_time(s: &Stream, now: u64) -> u64 {
 }
 
 fn load(env: &Env, id: u64) -> Result<Stream, Error> {
-    env.storage()
+    let stream = env.storage()
         .persistent()
         .get(&DataKey::Stream(id))
-        .ok_or(Error::StreamNotFound)
+        .ok_or(Error::StreamNotFound)?;
+    // Extend TTL to keep the entry alive for long-running streams
+    env.storage().persistent().extend_ttl(
+        &DataKey::Stream(id),
+        STREAM_TTL_THRESHOLD,
+        STREAM_TTL_EXTEND_TO,
+    );
+    Ok(stream)
 }
 
 fn save(env: &Env, id: u64, s: &Stream) {
     env.storage().persistent().set(&DataKey::Stream(id), s);
+    env.storage().persistent().extend_ttl(
+        &DataKey::Stream(id),
+        STREAM_TTL_THRESHOLD,
+        STREAM_TTL_EXTEND_TO,
+    );
 }
 
 fn entitlement(s: &Stream, r: &Recipient, now: u64) -> i128 {
@@ -122,6 +149,7 @@ impl StreamingContract {
 
         let id: u64 = env.storage().instance().get(&DataKey::Counter).unwrap_or(0) + 1;
         env.storage().instance().set(&DataKey::Counter, &id);
+        env.storage().instance().extend_ttl(STREAM_TTL_THRESHOLD, STREAM_TTL_EXTEND_TO);
         let stream = Stream {
             payer: payer.clone(),
             recipients: rs,
@@ -183,6 +211,7 @@ impl StreamingContract {
         r.withdrawn += amount;
         s.recipients.set(i, r);
         save(&env, id, &s);
+        env.storage().instance().extend_ttl(STREAM_TTL_THRESHOLD, STREAM_TTL_EXTEND_TO);
         token::Client::new(&env, &s.token).transfer(&env.current_contract_address(), &who, &amount);
         env.events().publish((symbol_short!("withdrew"), id), (who, amount));
         Ok(())
@@ -202,6 +231,7 @@ impl StreamingContract {
         let refund = s.amount - vested;
         s.cancelled_at = Some(now);
         save(&env, id, &s);
+        env.storage().instance().extend_ttl(STREAM_TTL_THRESHOLD, STREAM_TTL_EXTEND_TO);
         if refund > 0 {
             token::Client::new(&env, &s.token).transfer(
                 &env.current_contract_address(),

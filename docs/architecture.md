@@ -104,6 +104,22 @@ Each stream maintains:
 - Cancellation status
 - Owner/authorization information
 
+## Storage & TTL
+
+Soroban contract data lives in ledger entries with a time-to-live (TTL). Entries whose TTL runs out are archived and must be restored before use. To prevent long-running streams (such as payroll and vesting) from expiring before recipients withdraw, the contract extends TTLs on each state change:
+
+- **Stream entries** (`DataKey::Stream`): TTL is extended in `save()` and `load()` using constants `STREAM_TTL_THRESHOLD` (100,000 ledgers) and `STREAM_TTL_EXTEND_TO` (200,000 ledgers). The extension only applies when the current TTL is at or below the threshold.
+- **Contract instance storage** (`DataKey::Counter`): TTL is extended in `create_stream()`, `withdraw()`, and `cancel_stream()` using `env.storage().instance().extend_ttl(threshold, extend_to)`.
+
+The chosen threshold/extend-to values (100k/200k ledgers ≈ 5.7/11.6 days at ~5s/ledger) cover typical stream durations while keeping TTL management efficient. Each write/read operation implicitly extends the TTL, so as long as the contract remains active, entries stay alive.
+
+### TTL Constants
+
+| Constant | Value | Description |
+|---|---|---|
+| `STREAM_TTL_THRESHOLD` | 100,000 ledgers | Extend TTL if current TTL ≤ this value |
+| `STREAM_TTL_EXTEND_TO` | 200,000 ledgers | New TTL value after extension |
+
 ## SDK vs. Smart Contract Responsibilities
 
 **SDK Handles:**
