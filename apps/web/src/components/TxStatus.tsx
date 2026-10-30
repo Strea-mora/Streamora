@@ -13,7 +13,7 @@ export default function TxStatus({ state }: { state: TxState }) {
   } as const;
   const m = map[state.phase];
   return (
-    <div role="status" className={`p-4 border rounded-lg ${m.c}`}>
+    <div role={state.phase === "failed" || state.phase === "rejected" ? "alert" : "status"} className={`p-4 border rounded-lg ${m.c}`}>
       <p>{m.t}</p>
       {state.hash && (
         <a href={`${config.explorer}/tx/${state.hash}`} target="_blank" rel="noopener noreferrer" className="text-sm underline">

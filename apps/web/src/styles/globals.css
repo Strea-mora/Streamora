@@ -29,6 +29,11 @@
   a {
     @apply text-teal-600 hover:text-teal-700 transition-colors;
   }
+
+  a:focus-visible,
+  button:focus-visible {
+    @apply outline outline-2 outline-offset-2 outline-teal-600;
+  }
 }
 
 @layer components {

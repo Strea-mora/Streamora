@@ -111,7 +111,8 @@ describe("transaction states", () => {
   ];
   it.each(cases)("renders %o", (state, text) => {
     render(<TxStatus state={state} />);
-    expect(screen.getByRole("status")).toHaveTextContent(text);
+    const role = state.phase === "failed" || state.phase === "rejected" ? "alert" : "status";
+    expect(screen.getByRole(role)).toHaveTextContent(text);
   });
   it("renders nothing when idle", () => {
     const { container } = render(<TxStatus state={{ phase: "idle" }} />);

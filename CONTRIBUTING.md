@@ -23,20 +23,43 @@ Be respectful and constructive. We are committed to providing a welcoming enviro
 - Ensure all checks pass before requesting review.
 - Link related issues in the PR description.
 
-## Testing
+## Local setup
 
-Before submitting a PR:
+From the repository root, install the locked dependencies and create the Vite workspace configuration:
 
 ```bash
-# Run contract tests
-cd contracts && cargo test
-
-# Run SDK tests
-cd ../sdk && npm test
-
-# Run frontend tests and linting
-cd ../apps/web && npm test && npm run lint
+npm ci
+cp .env.example apps/web/.env.local
+npm run dev
 ```
+
+Vite runs within `apps/web`; putting only `.env.local` at the repository root will not configure the web app. See the [Quick Start](./README.md#quick-start).
+
+## Testing
+
+Before submitting a PR, run these from the **repository root**:
+
+```bash
+npm test          # SDK and web Vitest suites
+npm run lint      # SDK and web lint checks
+npm run build     # Production web build
+```
+
+To test individual workspaces:
+
+```bash
+npm -w sdk test
+npm -w apps/web test
+npm -w apps/web run lint
+```
+
+For Rust contract tests (requires Rust and contract dependencies):
+
+```bash
+(cd contracts/streaming && cargo test)
+```
+
+These commands match the root scripts and CI working directories.
 
 ## Reporting Issues
 
