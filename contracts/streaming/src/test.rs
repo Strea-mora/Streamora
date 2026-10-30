@@ -130,3 +130,260 @@ fn cancel_refunds_unvested_and_recipients_keep_vested() {
     c.client.withdraw(&id, &c.bob, &100);
     assert_eq!(c.token.balance(&c.client.address), 0);
 }
+
+// Issue #3: additional regression tests. Keep this test-only; no contract changes.
+
+#[test]
+fn create_rejects_more_than_ten_recipients() {
+    let c = setup();
+    let mut recipients = Vec::new(&c.env);
+    for _ in 0..11 {
+        recipients.push_back((c.alice.clone(), 10u32));
+    }
+    assert_eq!(
+        c.client.try_create_stream(
+            &c.payer, &recipients, &c.token.address, &1000, &1000, &2000,
+        ),
+        Err(Ok(Error::InvalidRecipients)),
+    );
+    assert_eq!(c.token.balance(&c.payer), 10_000);
+    assert_eq!(c.token.balance(&c.client.address), 0);
+}
+
+#[test]
+fn create_rejects_zero_recipient_share() {
+    let c = setup();
+    let recipients = vec![&c.env, (c.alice.clone(), 0u32), (c.bob.clone(), 100u32)];
+    assert_eq!(
+        c.client.try_create_stream(
+            &c.payer, &recipients, &c.token.address, &1000, &1000, &2000,
+        ),
+        Err(Ok(Error::InvalidRecipients)),
+    );
+    assert_eq!(c.token.balance(&c.payer), 10_000);
+    assert_eq!(c.token.balance(&c.client.address), 0);
+}
+
+#[test]
+fn create_rejects_share_above_hundred() {
+    let c = setup();
+    let recipients = vec![&c.env, (c.alice.clone(), 101u32)];
+    assert_eq!(
+        c.client.try_create_stream(
+            &c.payer, &recipients, &c.token.address, &1000, &1000, &2000,
+        ),
+        Err(Ok(Error::InvalidRecipients)),
+    );
+    assert_eq!(c.token.balance(&c.payer), 10_000);
+    assert_eq!(c.token.balance(&c.client.address), 0);
+}
+
+#[test]
+fn cancel_before_start_refunds_everything() {
+    let c = setup();
+    // Current ledger timestamp is 1000; this stream will not begin until 1500.
+    let id = c.client.create_stream(
+        &c.payer,
+        &vec![&c.env, (c.alice.clone(), 60u32), (c.bob.clone(), 40u32)],
+        &c.token.address,
+        &1000,
+        &1500,
+        &2500,
+    );
+    assert_eq!(c.token.balance(&c.payer), 9_000);
+    assert_eq!(c.token.balance(&c.client.address), 1_000);
+
+    assert_eq!(c.client.cancel_stream(&id), 1_000);
+    assert_eq!(c.client.get_stream(&id).cancelled_at, Some(1000));
+    assert_eq!(c.token.balance(&c.payer), 10_000);
+    assert_eq!(c.token.balance(&c.client.address), 0);
+    assert_eq!(c.token.balance(&c.alice), 0);
+    assert_eq!(c.token.balance(&c.bob), 0);
+    c.env.ledger().set_timestamp(3000);
+    assert_eq!(c.client.get_withdrawable(&id, &c.alice), 0);
+    assert_eq!(c.client.get_withdrawable(&id, &c.bob), 0);
+}
+
+#[test]
+fn cancel_after_end_refunds_zero_without_token_transfer() {
+    let c = setup();
+    let id = create(&c);
+    c.env.ledger().set_timestamp(2500);
+    assert_eq!(c.client.cancel_stream(&id), 0);
+    assert_eq!(c.client.get_stream(&id).cancelled_at, Some(2500));
+    assert_eq!(c.token.balance(&c.payer), 9_000);
+    assert_eq!(c.token.balance(&c.client.address), 1_000);
+    assert_eq!(c.token.balance(&c.alice), 0);
+    assert_eq!(c.token.balance(&c.bob), 0);
+    c.client.withdraw(&id, &c.alice, &600);
+    c.client.withdraw(&id, &c.bob, &400);
+    assert_eq!(c.token.balance(&c.client.address), 0);
+    assert_eq!(c.token.balance(&c.alice), 600);
+    assert_eq!(c.token.balance(&c.bob), 400);
+}
+
+#[test]
+fn cancel_requires_payer_authorization() {
+    let c = setup();
+    let id = create(&c);
+    c.env.ledger().set_timestamp(1250);
+    // No caller argument exists on cancel_stream; it authorizes the stored payer.
+    // Disable the blanket authorization mock after creating the funded stream.
+    c.env.set_auths(&[]);
+    assert!(c.client.try_cancel_stream(&id).is_err());
+    assert_eq!(c.client.get_stream(&id).cancelled_at, None);
+    assert_eq!(c.token.balance(&c.payer), 9_000);
+    assert_eq!(c.token.balance(&c.client.address), 1_000);
+    assert_eq!(c.token.balance(&c.alice), 0);
+    assert_eq!(c.token.balance(&c.bob), 0);
+}
+
+#[test]
+fn recipients_can_withdraw_after_cancellation() {
+    let c = setup();
+    let id = create(&c);
+    c.env.ledger().set_timestamp(1250);
+    assert_eq!(c.client.cancel_stream(&id), 750);
+    assert_eq!(c.client.get_withdrawable(&id, &c.alice), 150);
+    assert_eq!(c.client.get_withdrawable(&id, &c.bob), 100);
+    c.env.ledger().set_timestamp(5000);
+    c.client.withdraw(&id, &c.alice, &150);
+    c.client.withdraw(&id, &c.bob, &100);
+    assert_eq!(c.client.get_withdrawable(&id, &c.alice), 0);
+    assert_eq!(c.client.get_withdrawable(&id, &c.bob), 0);
+    assert_eq!(c.token.balance(&c.payer), 9_750);
+    assert_eq!(c.token.balance(&c.alice), 150);
+    assert_eq!(c.token.balance(&c.bob), 100);
+    assert_eq!(c.token.balance(&c.client.address), 0);
+}
+
+#[test]
+fn cancelled_withdrawable_stays_frozen_as_ledger_advances() {
+    let c = setup();
+    let id = create(&c);
+    c.env.ledger().set_timestamp(1250);
+    c.client.withdraw(&id, &c.alice, &50);
+    assert_eq!(c.client.cancel_stream(&id), 750);
+    for now in [1250u64, 1500, 2000, 10_000] {
+        c.env.ledger().set_timestamp(now);
+        assert_eq!(c.client.get_withdrawable(&id, &c.alice), 100);
+        assert_eq!(c.client.get_withdrawable(&id, &c.bob), 100);
+    }
+    assert_eq!(c.token.balance(&c.payer), 9_750);
+    assert_eq!(c.token.balance(&c.alice), 50);
+    assert_eq!(c.token.balance(&c.bob), 0);
+    assert_eq!(c.token.balance(&c.client.address), 200);
+    c.client.withdraw(&id, &c.alice, &100);
+    c.client.withdraw(&id, &c.bob, &100);
+    assert_eq!(c.token.balance(&c.client.address), 0);
+}
+
+#[test]
+fn get_stream_reports_current_state_and_withdrawn_shares() {
+    let c = setup();
+    let id = create(&c);
+    let initial = c.client.get_stream(&id);
+    assert_eq!(initial.payer, c.payer);
+    assert_eq!(initial.token, c.token.address);
+    assert_eq!(initial.amount, 1_000);
+    assert_eq!(initial.start_time, 1_000);
+    assert_eq!(initial.end_time, 2_000);
+    assert_eq!(initial.cancelled_at, None);
+    assert_eq!(initial.recipients.len(), 2);
+    let first = initial.recipients.get(0).unwrap();
+    let second = initial.recipients.get(1).unwrap();
+    assert_eq!((first.address, first.shares, first.withdrawn), (c.alice.clone(), 60, 0));
+    assert_eq!((second.address, second.shares, second.withdrawn), (c.bob.clone(), 40, 0));
+
+    c.env.ledger().set_timestamp(1500);
+    c.client.withdraw(&id, &c.alice, &100);
+    assert_eq!(c.client.get_stream(&id).recipients.get(0).unwrap().withdrawn, 100);
+    assert_eq!(c.token.balance(&c.payer), 9_000);
+    assert_eq!(c.token.balance(&c.alice), 100);
+    assert_eq!(c.token.balance(&c.client.address), 900);
+}
+
+#[test]
+fn get_vested_amount_uses_supplied_timestamp_and_ignores_cancellation() {
+    let c = setup();
+    let id = create(&c);
+    for (at, expected) in [(900u64, 0), (1000, 0), (1250, 250), (2000, 1000), (3000, 1000)] {
+        assert_eq!(c.client.get_vested_amount(&id, &at), expected);
+    }
+    c.env.ledger().set_timestamp(1250);
+    assert_eq!(c.client.cancel_stream(&id), 750);
+    // This getter reports hypothetical vesting at a supplied time, not a frozen claim.
+    assert_eq!(c.client.get_vested_amount(&id, &3000), 1_000);
+    assert_eq!(c.client.get_withdrawable(&id, &c.alice), 150);
+    assert_eq!(c.token.balance(&c.payer), 9_750);
+    assert_eq!(c.token.balance(&c.client.address), 250);
+}
+
+#[test]
+fn missing_stream_queries_return_stream_not_found() {
+    let c = setup();
+    assert_eq!(c.client.try_get_stream(&999), Err(Ok(Error::StreamNotFound)));
+    assert_eq!(
+        c.client.try_get_vested_amount(&999, &1500),
+        Err(Ok(Error::StreamNotFound)),
+    );
+    assert_eq!(
+        c.client.try_get_withdrawable(&999, &c.alice),
+        Err(Ok(Error::StreamNotFound)),
+    );
+    assert_eq!(c.token.balance(&c.payer), 10_000);
+    assert_eq!(c.token.balance(&c.client.address), 0);
+}
+
+#[test]
+fn cancelling_then_draining_recipients_leaves_one_unit_of_rounding_dust() {
+    let c = setup();
+    let id = create(&c); // 1000 units, 60% Alice, 40% Bob, 1000..2000.
+    c.env.ledger().set_timestamp(1101); // vested = floor(1000 * 101 / 1000) = 101
+    assert_eq!(c.client.get_vested_amount(&id, &1101), 101);
+    assert_eq!(c.client.cancel_stream(&id), 899);
+    // floor(101 * 60 / 100) = 60; floor(101 * 40 / 100) = 40.
+    assert_eq!(c.client.get_withdrawable(&id, &c.alice), 60);
+    assert_eq!(c.client.get_withdrawable(&id, &c.bob), 40);
+    assert_eq!(c.token.balance(&c.client.address), 101);
+    c.client.withdraw(&id, &c.alice, &60);
+    c.client.withdraw(&id, &c.bob, &40);
+    assert_eq!(c.client.get_withdrawable(&id, &c.alice), 0);
+    assert_eq!(c.client.get_withdrawable(&id, &c.bob), 0);
+    assert_eq!(c.token.balance(&c.payer), 9_899);
+    assert_eq!(c.token.balance(&c.alice), 60);
+    assert_eq!(c.token.balance(&c.bob), 40);
+    assert_eq!(c.token.balance(&c.client.address), 1); // documented rounding dust
+    assert_eq!(
+        c.token.balance(&c.payer)
+            + c.token.balance(&c.alice)
+            + c.token.balance(&c.bob)
+            + c.token.balance(&c.client.address),
+        10_000,
+    );
+}
+
+#[test]
+fn duplicate_recipient_address_is_accepted_but_has_inconsistent_withdrawal_lookup() {
+    let c = setup();
+    // Contract does not reject duplicates. The view selects the first entry,
+    // whereas withdraw currently updates the last matching entry.
+    let duplicates = vec![&c.env, (c.alice.clone(), 50u32), (c.alice.clone(), 50u32)];
+    let id = c.client.create_stream(
+        &c.payer, &duplicates, &c.token.address, &1000, &1000, &2000,
+    );
+    assert_eq!(c.client.get_stream(&id).recipients.len(), 2);
+    c.env.ledger().set_timestamp(2500);
+    assert_eq!(c.client.get_withdrawable(&id, &c.alice), 500);
+    c.client.withdraw(&id, &c.alice, &500);
+    // This documents existing behavior, not the desired business rule.
+    assert_eq!(c.client.get_withdrawable(&id, &c.alice), 500);
+    assert_eq!(c.client.try_withdraw(&id, &c.alice, &500), Err(Ok(Error::NothingToWithdraw)));
+    let stream = c.client.get_stream(&id);
+    assert_eq!(stream.recipients.get(0).unwrap().withdrawn, 0);
+    assert_eq!(stream.recipients.get(1).unwrap().withdrawn, 500);
+    assert_eq!(c.token.balance(&c.payer), 9_000);
+    assert_eq!(c.token.balance(&c.alice), 500);
+    assert_eq!(c.token.balance(&c.bob), 0);
+    assert_eq!(c.token.balance(&c.client.address), 500);
+}
