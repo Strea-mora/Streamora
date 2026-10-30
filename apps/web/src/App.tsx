@@ -1,6 +1,7 @@
-import { BrowserRouter as Router, Routes, Route } from "react-router-dom";
+import { BrowserRouter as Router, Routes, Route, useLocation } from "react-router-dom";
 import Navigation from "./components/Navigation";
 import Footer from "./components/Footer";
+import ErrorBoundary from "./components/ErrorBoundary";
 
 import Home from "./pages/Home";
 import HowItWorks from "./pages/HowItWorks";
@@ -30,9 +31,19 @@ import Settings from "./pages/app/Settings";
 export default function App() {
   return (
     <Router>
-      <div className="flex flex-col min-h-screen">
-        <Navigation />
-        <main className="flex-1">
+      <AppLayout />
+    </Router>
+  );
+}
+
+function AppLayout() {
+  const location = useLocation();
+
+  return (
+    <div className="flex flex-col min-h-screen">
+      <Navigation />
+      <main className="flex-1">
+        <ErrorBoundary key={location.pathname}>
           <Routes>
             {/* Public Pages */}
             <Route path="/" element={<Home />} />
@@ -67,9 +78,9 @@ export default function App() {
             {/* 404 */}
             <Route path="*" element={<NotFound />} />
           </Routes>
-        </main>
-        <Footer />
-      </div>
-    </Router>
+        </ErrorBoundary>
+      </main>
+      <Footer />
+    </div>
   );
 }
